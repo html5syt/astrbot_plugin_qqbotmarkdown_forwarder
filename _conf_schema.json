@@ -1,0 +1,89 @@
+{
+  "enabled": {
+    "description": "启用 Markdown 自动转发",
+    "type": "bool",
+    "default": true
+  },
+  "detection_mode": {
+    "description": "Markdown 检测模式",
+    "type": "string",
+    "default": "regex_or_length",
+    "options": [
+      "regex_only",
+      "length_only",
+      "regex_or_length",
+      "regex_and_length"
+    ],
+    "hint": "依次表示：仅正则、仅长度、正则或长度、正则且长度。"
+  },
+  "markdown_patterns": {
+    "description": "Markdown 特征正则表达式",
+    "type": "list",
+    "default": [
+      "(?m)^#{1,6}\\s+\\S",
+      "(?m)^\\s{0,3}(?:[-*+]|\\d+\\.)\\s+\\S",
+      "(?m)^\\s{0,3}>\\s+\\S",
+      "(?s)```.+?```",
+      "(?<!\\w)(?:\\*\\*|__)(?=\\S).+?(?<=\\S)(?:\\*\\*|__)",
+      "`[^`\\n]+`",
+      "!?\\[[^\\]\\n]*\\]\\([^\\)\\n]+\\)",
+      "(?m)^\\|?.+\\|.+\\r?\\n\\|?\\s*:?-{3,}:?\\s*\\|"
+    ],
+    "hint": "每项是一个 Python 正则；无效表达式会被忽略并写入日志。"
+  },
+  "minimum_regex_matches": {
+    "description": "至少命中的正则数量",
+    "type": "int",
+    "default": 1,
+    "hint": "按命中的表达式条数计数，而不是同一表达式的出现次数。"
+  },
+  "length_threshold": {
+    "description": "消息长度阈值",
+    "type": "int",
+    "default": 800,
+    "hint": "字符数达到该值视为长度命中；设为 0 可关闭长度检测。"
+  },
+  "only_plain_text": {
+    "description": "仅转发纯文本消息链",
+    "type": "bool",
+    "default": true,
+    "hint": "建议保持开启，避免 Markdown 与图片等富媒体混合时发生内容丢失。"
+  },
+  "pending_request_ttl_seconds": {
+    "description": "绑定请求有效期（秒）",
+    "type": "int",
+    "default": 600
+  },
+  "forward_timeout_seconds": {
+    "description": "单个 QQBot 目标转发超时（秒）",
+    "type": "int",
+    "default": 20
+  },
+  "intercept_policy": {
+    "description": "OneBot 原消息拦截策略",
+    "type": "string",
+    "default": "any_success",
+    "options": [
+      "any_success",
+      "all_success"
+    ],
+    "hint": "any_success：任一目标成功即拦截；all_success：全部目标成功才拦截。"
+  },
+  "runtime_event_cache_size": {
+    "description": "QQ 运行时事件缓存上限",
+    "type": "int",
+    "default": 256
+  },
+  "native_plain_fallback": {
+    "description": "QQ 原生 Markdown 失败时降级纯文本",
+    "type": "bool",
+    "default": true,
+    "hint": "QQ 机器人未获得原生 Markdown 权限时可避免消息完全丢失。"
+  },
+  "debug_logging": {
+    "description": "输出调试日志",
+    "type": "bool",
+    "default": false
+  }
+}
+
