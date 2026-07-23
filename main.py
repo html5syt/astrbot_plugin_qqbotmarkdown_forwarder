@@ -213,7 +213,7 @@ class Main(Star):
 
     @filter.on_decorating_result(priority=1000)
     async def forward_markdown_before_send(self, event: AstrMessageEvent) -> None:
-        """发送前检测 Markdown，转发成功后清空并终止 OneBot 原发送。"""
+        """发送前检测 Markdown，转发成功后清空 OneBot 原发送内容。"""
 
         if (
             not self.settings.enabled
@@ -267,10 +267,11 @@ class Main(Star):
                 logger.warning(f"QQ 转发成功，但更新目标消息 ID 失败: {exc!s}")
 
         if report.should_intercept(self.settings.intercept_policy):
+            # 只清空待发送内容，不停止事件管线。RespondStage 会跳过空消息链，
+            # 但仍会触发标准的 OnAfterMessageSentEvent，供思考状态等插件收尾。
             result.chain.clear()
-            event.stop_event()
             logger.info(
-                "已转发并拦截 OneBot Markdown 消息: "
+                "已转发并清空 OneBot Markdown 原消息: "
                 f"success={report.success_count}, failed={report.failure_count}"
             )
         else:

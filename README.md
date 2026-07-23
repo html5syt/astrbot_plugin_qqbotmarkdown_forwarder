@@ -1,6 +1,6 @@
 # OneBot Markdown 转发器
 
-这是一个 AstrBot 插件，用于把指定 OneBot 群聊或私聊中的 Markdown 回复转发到 QQ 官方机器人会话。转发达到配置的成功条件后，插件会在发送前清空结果并终止事件，使原消息不再从 OneBot 发出。
+这是一个 AstrBot 插件，用于把指定 OneBot 群聊或私聊中的 Markdown 回复转发到 QQ 官方机器人会话。转发达到配置的成功条件后，插件会在发送前清空结果，使原消息不再从 OneBot 发出，同时保留 AstrBot 后续发送生命周期钩子。
 
 ## 兼容性
 
@@ -69,6 +69,8 @@ QQ 官方 Bot API 不会向机器人提供真实群号或私人 QQ 号，只会�
 
 多个目标会并发发送。默认 `any_success` 策略下，只要至少一个目标成功就拦截 OneBot 原消息；如果所有目标均失败，原 OneBot 消息会保留，避免内容丢失。
 
+成功拦截时插件只清空 OneBot 消息链，不会调用 `stop_event()` 提前终止管线。AstrBot 因此仍会触发标准的 `OnAfterMessageSentEvent`，使 `astrbot_plugin_iamthinking` 等依赖发送完成通知的插件能够正确结束思考状态。
+
 ## QQ 官方 Markdown 说明
 
 运行期间，插件优先复用目标 QQ 会话的原生事件发送路径。AstrBot 重启后，插件会根据绑定中持久化的场景和地址调用对应 QQ 官方接口。
@@ -84,4 +86,3 @@ QQ 官方 Bot API 不会向机器人提供真实群号或私人 QQ 号，只会�
 ```text
 python -m unittest discover -s tests -v
 ```
-
