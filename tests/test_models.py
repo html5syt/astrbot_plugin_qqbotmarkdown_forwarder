@@ -20,7 +20,7 @@ class FakeEvent:
         return "adapter"
 
     def get_sender_name(self):
-        return "???"
+        return "管理员"
 
 
 class EndpointIdentityTests(unittest.TestCase):
@@ -136,7 +136,9 @@ class EndpointIdentityTests(unittest.TestCase):
             sender=SimpleNamespace(user_id="member-1"),
             message_id="m5",
         )
-        event = FakeEvent("qq_official", "FriendMessage", "member-1", message_obj, raw)
+        event = FakeEvent(
+            "qq_official", "FriendMessage", "member-1", message_obj, raw
+        )
 
         endpoint = Endpoint.from_event(event)
 
