@@ -1,4 +1,4 @@
-"""QQ 官方机器人 Markdown 发送实现。"""
+"""QQ 官方机器人 Markdown 与交互按钮发送实现。"""
 
 from __future__ import annotations
 
@@ -55,12 +55,19 @@ class QQMarkdownSender:
         while len(self._events) > self._event_cache_size:
             self._events.popitem(last=False)
 
-    async def send_markdown(self, endpoint: Endpoint, text: str) -> SendReceipt:
+    async def send_markdown(
+        self,
+        endpoint: Endpoint,
+        text: str,
+        *,
+        keyboard: dict[str, Any] | None = None,
+        chain: Any = None,
+    ) -> SendReceipt:
         if endpoint.platform_name not in QQ_PLATFORM_NAMES:
             raise QQMarkdownSendError(
                 f"目标平台不是 QQ 官方机器人: {endpoint.platform_name}"
             )
-        if not text:
+        if not text and chain is None:
             raise QQMarkdownSendError("Markdown 内容为空")
 
         lock = self._target_locks.setdefault(
@@ -70,7 +77,10 @@ class QQMarkdownSender:
             event = self._events.get(endpoint.unified_msg_origin)
             if event is not None:
                 try:
-                    await event.send(self._build_markdown_chain(text))
+                    send_target = (
+                        chain if chain is not None else self._build_markdown_chain(text)
+                    )
+                    await event.send(send_target)
                     return SendReceipt(method="runtime_event")
                 except Exception as exc:
                     self._logger.warning(
@@ -78,16 +88,21 @@ class QQMarkdownSender:
                         f"{endpoint.unified_msg_origin}, {exc!s}"
                     )
 
-            return await self._send_native(endpoint, text)
+            return await self._send_native(endpoint, text, keyboard=keyboard)
 
     @staticmethod
     def _build_markdown_chain(text: str) -> Any:
-        # 延迟导入，便于独立测试不依赖完整 AstrBot 运行环境。
         from astrbot.api.event import MessageChain
 
         return MessageChain().message(text).use_markdown(True)
 
-    async def _send_native(self, endpoint: Endpoint, text: str) -> SendReceipt:
+    async def _send_native(
+        self,
+        endpoint: Endpoint,
+        text: str,
+        *,
+        keyboard: dict[str, Any] | None = None,
+    ) -> SendReceipt:
         platform = self._context.get_platform_inst(endpoint.platform_id)
         if platform is None:
             raise QQMarkdownSendError(f"未找到 QQ 平台实例: {endpoint.platform_id}")
@@ -100,11 +115,31 @@ class QQMarkdownSender:
             raise QQMarkdownSendError("QQ 平台实例没有可用客户端")
 
         try:
-            result = await self._send_payload(client, endpoint, text, use_markdown=True)
+            result = await self._send_payload(
+                client, endpoint, text, use_markdown=True, keyboard=keyboard
+            )
             if result is None:
                 raise QQMarkdownSendError("QQ Markdown API 未返回发送结果")
             method = "native_markdown"
         except Exception as markdown_error:
+            if keyboard is not None:
+                try:
+                    self._logger.warning(
+                        "QQ Markdown 带键盘发送失败，尝试无键盘发送: "
+                        f"{markdown_error!s}"
+                    )
+                    result = await self._send_payload(
+                        client, endpoint, text, use_markdown=True, keyboard=None
+                    )
+                    if result is not None:
+                        message_id = self._extract_message_id(result)
+                        return SendReceipt(
+                            method="native_markdown_nokeyboard",
+                            message_id=message_id,
+                        )
+                except Exception:
+                    pass
+
             if not self._native_plain_fallback:
                 raise QQMarkdownSendError(str(markdown_error)) from markdown_error
             self._logger.warning(
@@ -113,7 +148,7 @@ class QQMarkdownSender:
             )
             try:
                 result = await self._send_payload(
-                    client, endpoint, text, use_markdown=False
+                    client, endpoint, text, use_markdown=False, keyboard=keyboard
                 )
                 if result is None:
                     raise QQMarkdownSendError("QQ 纯文本 API 未返回发送结果")
@@ -138,6 +173,7 @@ class QQMarkdownSender:
         text: str,
         *,
         use_markdown: bool,
+        keyboard: dict[str, Any] | None = None,
     ) -> Any:
         scene = endpoint.scene
         if not scene:
@@ -155,6 +191,9 @@ class QQMarkdownSender:
         else:
             payload = {"content": text}
 
+        if keyboard is not None:
+            payload["keyboard"] = keyboard
+
         if scene in {"group", "c2c"}:
             payload["msg_type"] = 2 if use_markdown else 0
             payload["msg_seq"] = random.randint(1, 10000)
@@ -164,7 +203,6 @@ class QQMarkdownSender:
         try:
             return await self._dispatch(client, scene, address, payload)
         except self._retryable_api_errors():
-            # 频道/频道私信的旧 msg_id 可能失效；失败后再尝试主动推送。
             if "msg_id" not in payload:
                 raise
             retry_payload = dict(payload)

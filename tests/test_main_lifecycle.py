@@ -61,6 +61,8 @@ def load_main_module():
         platform_adapter_type=identity_decorator,
         event_message_type=identity_decorator,
         on_decorating_result=identity_decorator,
+        llm_tool=identity_decorator,
+        button_action=identity_decorator,
     )
     star_module.Context = object
     star_module.Star = object
@@ -100,21 +102,32 @@ MAIN_MODULE = load_main_module()
 class FakeEvent:
     unified_msg_origin = "aiocqhttp:GroupMessage:123456"
 
-    def __init__(self, chain):
+    def __init__(self, chain, platform="aiocqhttp"):
         self.result = SimpleNamespace(chain=chain)
         self.stopped = False
+        self._platform = platform
+        self.extras = {}
 
     def get_platform_name(self):
-        return "aiocqhttp"
+        return self._platform
 
-    def get_extra(self, _key, default=None):
-        return default
+    def get_extra(self, key, default=None):
+        return self.extras.get(key, default)
+
+    def set_extra(self, key, value):
+        self.extras[key] = value
 
     def get_result(self):
         return self.result
 
     def stop_event(self):
         self.stopped = True
+
+    def chain_result(self, chain):
+        return SimpleNamespace(chain=chain)
+
+    def plain_result(self, text):
+        return SimpleNamespace(text=text)
 
 
 class FakeReport:
@@ -129,10 +142,12 @@ class FakeReport:
         return self.intercept
 
 
-def make_plugin(report):
+def make_plugin(report, enabled=True):
+    from services.interactive import ButtonLifecycleManager
+
     return SimpleNamespace(
         settings=SimpleNamespace(
-            enabled=True,
+            enabled=enabled,
             only_plain_text=True,
             debug_logging=False,
             intercept_policy="any_success",
@@ -151,6 +166,8 @@ def make_plugin(report):
             )
         ),
         forwarder=SimpleNamespace(forward=AsyncMock(return_value=report)),
+        button_lifecycle=ButtonLifecycleManager(),
+        _mark_command_result=Mock(),
     )
 
 
@@ -173,6 +190,49 @@ class MainLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(event.result.chain, original_chain)
         self.assertFalse(event.stopped)
+
+    async def test_satori_platform_forwarding_supported(self):
+        event = FakeEvent([Plain("$$E=mc^2$$")], platform="satori")
+        plugin = make_plugin(FakeReport(intercept=True))
+
+        await MAIN_MODULE.Main.forward_markdown_before_send(plugin, event)
+
+        self.assertEqual(event.result.chain, [])
+        plugin.forwarder.forward.assert_awaited_once()
+
+    async def test_tool_sends_even_when_auto_forwarding_disabled(self):
+        event = FakeEvent([], platform="aiocqhttp")
+        plugin = make_plugin(FakeReport(intercept=True), enabled=False)
+
+        layout = (
+            '{"markdown": "## 报告", "action_rows": [{"buttons": '
+            '[{"label": "查看", "action": "url", "url": "https://example.com"}]}]}'
+        )
+
+        results = []
+        gen = MAIN_MODULE.Main.send_markdown_with_buttons(plugin, event, layout)
+        async for item in gen:
+            results.append(item)
+
+        plugin.forwarder.forward.assert_awaited_once()
+        self.assertTrue(any("已成功将交互式 Markdown" in str(r) for r in results))
+
+    async def test_button_callback_action_handled(self):
+        plugin = make_plugin(FakeReport(intercept=True))
+        event = FakeEvent([], platform="qq_official")
+        event.get_button_interaction = Mock(
+            return_value=SimpleNamespace(
+                action_id="ob2qb:test_btn",
+                data={"reply": "处理成功！"},
+            )
+        )
+
+        results = []
+        async for item in MAIN_MODULE.Main.handle_button_action(plugin, event):
+            results.append(item)
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].text, "处理成功！")
 
 
 if __name__ == "__main__":

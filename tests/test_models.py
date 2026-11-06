@@ -20,7 +20,7 @@ class FakeEvent:
         return "adapter"
 
     def get_sender_name(self):
-        return "管理员"
+        return "???"
 
 
 class EndpointIdentityTests(unittest.TestCase):
@@ -55,6 +55,40 @@ class EndpointIdentityTests(unittest.TestCase):
         self.assertEqual(endpoint.chat_type, "private")
         self.assertEqual(endpoint.chat_id, "99887766")
         self.assertEqual(endpoint.id_kind, "qq_number")
+
+    def test_satori_group_endpoint(self):
+        message_obj = SimpleNamespace(
+            group_id="guild_channel_123",
+            sender=SimpleNamespace(user_id="user_satori_1"),
+            message_id="sm1",
+        )
+        event = FakeEvent(
+            "satori", "GroupMessage", "channel_123", message_obj, object()
+        )
+
+        endpoint = Endpoint.from_event(event)
+
+        self.assertEqual(endpoint.platform_name, "satori")
+        self.assertEqual(endpoint.chat_type, "group")
+        self.assertEqual(endpoint.chat_id, "guild_channel_123")
+        self.assertEqual(endpoint.id_kind, "group_id")
+
+    def test_satori_private_endpoint(self):
+        message_obj = SimpleNamespace(
+            group_id=None,
+            sender=SimpleNamespace(user_id="user_satori_2"),
+            message_id="sm2",
+        )
+        event = FakeEvent(
+            "satori", "FriendMessage", "direct_channel_456", message_obj, object()
+        )
+
+        endpoint = Endpoint.from_event(event)
+
+        self.assertEqual(endpoint.platform_name, "satori")
+        self.assertEqual(endpoint.chat_type, "private")
+        self.assertEqual(endpoint.chat_id, "user_satori_2")
+        self.assertEqual(endpoint.id_kind, "user_id")
 
     def test_qq_group_uses_group_openid(self):
         raw = SimpleNamespace(group_openid="group-openid-1")

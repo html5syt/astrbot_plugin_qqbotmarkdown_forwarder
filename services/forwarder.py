@@ -1,4 +1,4 @@
-"""一对多 Markdown 转发编排。"""
+"""一对多 Markdown 与富文本交互消息转发编排。"""
 
 from __future__ import annotations
 
@@ -50,18 +50,45 @@ class MarkdownForwarder:
         self._logger = logger
         self._timeout_seconds = max(1, timeout_seconds)
 
-    async def forward(self, bindings: list[Binding], text: str) -> ForwardReport:
+    async def forward(
+        self,
+        bindings: list[Binding],
+        text: str,
+        *,
+        keyboard: dict[str, Any] | None = None,
+        chain: Any = None,
+    ) -> ForwardReport:
         """并发发送所有目标，单个目标失败不会影响其他目标。"""
 
         attempts = await asyncio.gather(
-            *(self._forward_one(binding, text) for binding in bindings)
+            *(
+                self._forward_one(
+                    binding, text, keyboard=keyboard, chain=chain
+                )
+                for binding in bindings
+            )
         )
         return ForwardReport(tuple(attempts))
 
-    async def _forward_one(self, binding: Binding, text: str) -> ForwardAttempt:
+    async def _forward_one(
+        self,
+        binding: Binding,
+        text: str,
+        *,
+        keyboard: dict[str, Any] | None = None,
+        chain: Any = None,
+    ) -> ForwardAttempt:
+        extra_kwargs: dict[str, Any] = {}
+        if keyboard is not None:
+            extra_kwargs["keyboard"] = keyboard
+        if chain is not None:
+            extra_kwargs["chain"] = chain
+
         try:
             receipt = await asyncio.wait_for(
-                self._sender.send_markdown(binding.target, text),
+                self._sender.send_markdown(
+                    binding.target, text, **extra_kwargs
+                ),
                 timeout=self._timeout_seconds,
             )
             return ForwardAttempt(binding=binding, success=True, receipt=receipt)

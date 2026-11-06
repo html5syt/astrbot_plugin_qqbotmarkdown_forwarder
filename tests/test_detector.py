@@ -12,10 +12,38 @@ class MarkdownDetectorTests(unittest.TestCase):
             length_threshold=0,
         )
 
-        result = detector.detect("# 标题\n正文")
+        result = detector.detect("# ??\n??")
 
         self.assertTrue(result.matched)
         self.assertGreaterEqual(result.regex_hits, 1)
+
+    def test_bold_alone_is_detected(self):
+        detector = MarkdownDetector(
+            DEFAULT_MARKDOWN_PATTERNS,
+            mode="regex_only",
+            length_threshold=0,
+        )
+
+        self.assertTrue(detector.detect("**??**").matched)
+        self.assertTrue(detector.detect("???**??**??").matched)
+        self.assertTrue(detector.detect("??**????**??").matched)
+
+    def test_latex_formulas_are_detected(self):
+        detector = MarkdownDetector(
+            DEFAULT_MARKDOWN_PATTERNS,
+            mode="regex_only",
+            length_threshold=0,
+        )
+
+        # ??????
+        self.assertTrue(detector.detect("$??$").matched)
+        self.assertTrue(detector.detect("$E=mc^2$").matched)
+        # ??????
+        self.assertTrue(detector.detect("$$??$$").matched)
+        self.assertTrue(detector.detect("$$\n\\int_0^1 f(x)dx\n$$").matched)
+        # ????
+        self.assertTrue(detector.detect("??????? $a+b=c$ ???").matched)
+        self.assertTrue(detector.detect("?????**????**??? $$x=1$$ ??").matched)
 
     def test_short_plain_text_is_not_markdown(self):
         detector = MarkdownDetector(
@@ -24,7 +52,8 @@ class MarkdownDetectorTests(unittest.TestCase):
             length_threshold=100,
         )
 
-        self.assertFalse(detector.detect("普通短消息").matched)
+        self.assertFalse(detector.detect("?????").matched)
+        self.assertFalse(detector.detect("?? $100 ?").matched)
 
     def test_length_only_mode(self):
         detector = MarkdownDetector([], mode="length_only", length_threshold=5)
@@ -39,13 +68,13 @@ class MarkdownDetectorTests(unittest.TestCase):
             length_threshold=10,
         )
 
-        self.assertFalse(detector.detect("# 短").matched)
-        self.assertTrue(detector.detect("# 足够长的标题文本").matched)
+        self.assertFalse(detector.detect("# ?").matched)
+        self.assertTrue(detector.detect("# ????????").matched)
 
     def test_invalid_regex_is_ignored(self):
         detector = MarkdownDetector(["[", r"^#\s"], mode="regex_only")
 
-        result = detector.detect("# 标题")
+        result = detector.detect("# ??")
 
         self.assertEqual(result.invalid_patterns, ("[",))
         self.assertTrue(result.matched)

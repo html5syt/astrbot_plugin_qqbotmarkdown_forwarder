@@ -1,12 +1,14 @@
 name: astrbot_plugin_qqbotmarkdown_forwarder
-display_name: OneBot Markdown 转发器
-desc: 将绑定的 OneBot 群聊或私聊 Markdown 回复转发到 QQ 官方机器人，并拦截 OneBot 原消息。
-short_desc: 在 OneBot 与 QQ 官方机器人会话之间绑定并转发 Markdown 回复。
-version: 1.0.0
+display_name: OneBot / Satori Markdown 转发器
+desc: 将绑定的 OneBot 或 Satori 群聊/私聊 Markdown 与交互按钮回复转发到 QQ 官方机器人，并拦截原消息。支持大模型主动调用发送带交互按钮的 Markdown 消息。
+short_desc: 在 OneBot / Satori 与 QQ 官方机器人会话之间转发 Markdown 及交互按钮消息。
+version: 1.1.0
 author: Mr. Tim
+repo: https://github.com/html5syt/astrbot_plugin_qqbotmarkdown_forwarder
+logo: logo.png
 support_platforms:
   - aiocqhttp
+  - satori
   - qq_official
   - qq_official_webhook
 astrbot_version: ">=4.26,<5"
-

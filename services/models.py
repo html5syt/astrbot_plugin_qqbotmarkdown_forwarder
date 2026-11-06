@@ -1,4 +1,4 @@
-"""绑定请求和绑定关系的数据模型。"""
+"""???????????????"""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ def _string(value: Any) -> str:
 
 
 def _raw_type_is(raw_message: Any, expected_name: str) -> bool:
-    """兼容 QQ SDK 原始类型及 AstrBot 的 Patched* 包装类型。"""
+    """?? QQ SDK ????? AstrBot ? Patched* ?????"""
 
     if raw_message is None:
         return False
@@ -20,7 +20,7 @@ def _raw_type_is(raw_message: Any, expected_name: str) -> bool:
 
 @dataclass(frozen=True, slots=True)
 class Endpoint:
-    """一条 AstrBot 会话端点，可安全序列化到插件 KV 存储。"""
+    """?? AstrBot ?????????????? KV ???"""
 
     platform_id: str
     platform_name: str
@@ -37,7 +37,7 @@ class Endpoint:
 
     @classmethod
     def from_event(cls, event: Any) -> Endpoint:
-        """从 AstrBot 事件提取端点及 QQ 官方发送所需的场景信息。"""
+        """? AstrBot ??????? QQ ????????????"""
 
         message_obj = getattr(event, "message_obj", None)
         raw_message = getattr(message_obj, "raw_message", None)
@@ -46,7 +46,7 @@ class Endpoint:
         scene = ""
         address_id = session_id
 
-        # QQ 官方的四类消息分别使用不同 API；持久化实际地址后，重启也能发送。
+        # QQ ????????????? API?????????????????
         author = getattr(raw_message, "author", None)
         group_openid = _string(getattr(raw_message, "group_openid", ""))
         user_openid = _string(getattr(author, "user_openid", ""))
@@ -72,7 +72,7 @@ class Endpoint:
         is_group = message_type == "GroupMessage"
         chat_type = "group" if is_group else "private"
 
-        # OneBot 能提供真实群号/QQ 号；QQ 官方只提供 OpenID 或频道 ID。
+        # OneBot ???????/QQ ??Satori ??? ID/?? ID?QQ ???? OpenID ??? ID?
         if platform_name == "aiocqhttp":
             if is_group:
                 chat_id = _string(getattr(message_obj, "group_id", session_id))
@@ -81,6 +81,15 @@ class Endpoint:
                 sender = getattr(message_obj, "sender", None)
                 chat_id = _string(getattr(sender, "user_id", session_id))
                 id_kind = "qq_number"
+        elif platform_name == "satori":
+            if is_group:
+                chat_id = _string(getattr(message_obj, "group_id", None) or session_id)
+                id_kind = "group_id"
+            else:
+                sender = getattr(message_obj, "sender", None)
+                chat_id = _string(getattr(sender, "user_id", None) or session_id)
+                id_kind = "user_id"
+            address_id = chat_id or session_id
         else:
             chat_id = address_id
             id_kind = {

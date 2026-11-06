@@ -18,10 +18,12 @@ class FakeSender:
     def __init__(self):
         self.active = 0
         self.max_active = 0
+        self.calls = []
 
-    async def send_markdown(self, endpoint, text):
+    async def send_markdown(self, endpoint, text, **kwargs):
         self.active += 1
         self.max_active = max(self.max_active, self.active)
+        self.calls.append((endpoint, text, kwargs))
         try:
             await asyncio.sleep(0)
             if endpoint.chat_id == "failed":
@@ -90,6 +92,26 @@ class MarkdownForwarderTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(report.success_count, 2)
         self.assertTrue(report.should_intercept("all_success"))
+
+    async def test_forward_with_keyboard_and_chain(self):
+        sender = FakeSender()
+        logger = FakeLogger()
+        forwarder = MarkdownForwarder(sender, logger, timeout_seconds=5)
+
+        kb = {"rows": []}
+        chain = object()
+        report = await forwarder.forward(
+            [binding("300001", "target1")],
+            "# Interactive",
+            keyboard=kb,
+            chain=chain,
+        )
+
+        self.assertEqual(report.success_count, 1)
+        self.assertEqual(len(sender.calls), 1)
+        _, _, kwargs = sender.calls[0]
+        self.assertIs(kwargs.get("keyboard"), kb)
+        self.assertIs(kwargs.get("chain"), chain)
 
 
 if __name__ == "__main__":
