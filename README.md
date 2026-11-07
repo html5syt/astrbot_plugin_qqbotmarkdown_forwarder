@@ -198,18 +198,198 @@ QQ 官方 Bot API 不向开发者提供真实 QQ 号与群号，而是使用场�
 - `markdown` / `content` (*string*): Markdown 正文。
 - `images` / `image` (*list[string]* | *string*): 图片外链 URL 或本地绝对路径。
 - `action_rows` (*list[object]*): 按钮行配置列表。
-  - `action_timeout` (*int*, 可选): 按钮有效倒计时（秒）。超时后点击将提示已过期。
+  - `action_timeout` / `timeout` (*int*, 可选): 按钮有效倒计时（秒）。超时后点击将提示已过期。
   - `fallback_text` (*string*, 可选): 不支持按钮时的回退文本。
   - `buttons` (*list[object]*): 按钮列表。
     - `id` (*string*): 按钮唯一标识（推荐以 `ob2qb:` 为前缀）。
     - `label` (*string*): 按钮表面文字（建议 1~10 字符）。
     - `action` (*string*): `"callback"`（回调触发）或 `"url"`（外链跳转）。
     - `url` (*string*): 当 `action="url"` 时的跳转链接。
-    - `data` (*dict*): 当 `action="callback"` 时的回传字典。
+    - `data` (*dict*): 当 `action="callback"` 时的回传字典，核心支持：
+      - `prompt` (*string*, 可选): **动态触发来源 Bot LLM**。用户点击后，插件自动获取当前会话正在使用的模型 Provider 生成回答，支持 `{user_name}`、`{user_id}`、`{choice}` 等变量自动注入。
+      - `system_prompt` (*string*, 可选): 配合 `prompt` 使用的系统角色或背景约束。
+      - `next_layout` (*object*, 可选): **多轮状态机卡片流转**。用户点击后直接呈现下一级带交互按钮的卡片，天然支持分级菜单、客服向导、答题推进等。
+      - `reply` / `text` (*string*, 可选): 点击后由 Bot 即时发送给用户的文字反馈。
+      - `game` / `rule` (*string*, 可选): 通用规则决策（如 `rps` 猜拳对决、`dice` 掷骰子、`quiz` 答题核验、`draw` 随机抽取、`compare` 数值比对）。
     - `style` (*string*, 可选): 按钮样式：`"primary"` (蓝色/主色), `"secondary"` (灰色/次要), `"success"` (绿色), `"danger"` (红色)。默认 primary。
-    - `reply` (*string*, 可选): 点击后由 Bot 自动向用户发送的反馈文本。
 
 ---
+
+### 多轮交互通用场景示例（客服、帮助导航、各类游戏等）
+
+本交互机制完全解耦且**不局限于任何特定游戏或场景**，Bot 可按需在任意场景中组合使用：
+
+#### 场景 1：分级客服菜单与工单流转（多轮卡片状态机）
+一级卡片引导用户分类，点击后通过 `next_layout` 即时呈现对应子业务卡片，最后由大模型接管咨询：
+```json
+{
+  "markdown": "您好！我是智能客服助手，请选择您需要咨询的业务类别：",
+  "action_rows": [
+    {
+      "buttons": [
+        {
+          "id": "cs:aftersales",
+          "label": "售后与退换",
+          "action": "callback",
+          "style": "primary",
+          "data": {
+            "reply": "正在为您展开售后服务选项...",
+            "next_layout": {
+              "markdown": "## 售后服务专区\n请选择具体诉求：",
+              "action_rows": [
+                {
+                  "buttons": [
+                    {
+                      "id": "cs:refund_ai",
+                      "label": "退款政策咨询",
+                      "action": "callback",
+                      "style": "primary",
+                      "data": {
+                        "prompt": "用户 {user_name} 咨询了退款政策，请详细说明 7 天无理由退货及退款到账时效。"
+                      }
+                    },
+                    {
+                      "id": "cs:manual",
+                      "label": "转接人工专员",
+                      "action": "callback",
+                      "style": "danger",
+                      "data": {
+                        "reply": "已为您生成工单并呼叫人工值班客服，请稍候！"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "id": "cs:logistics",
+          "label": "物流进度查询",
+          "action": "callback",
+          "style": "secondary",
+          "data": {
+            "prompt": "用户 {user_name} 想要查询最新物流，请指引用户提供快递单号并说明查询途径。"
+          }
+        }
+      ]
+    }
+  ]
+}
+```
+
+#### 场景 2：帮助中心分步向导（带 Prompt 动态解析）
+通过按钮点击引导用户查看具体章节，并由大模型结合上下文回答深入疑问：
+```json
+{
+  "markdown": "### 📖 插件使用帮助中心\n请选择您想了解的功能模块：",
+  "action_rows": [
+    {
+      "buttons": [
+        {
+          "id": "help:bind",
+          "label": "绑定命令说明",
+          "action": "callback",
+          "style": "primary",
+          "data": {
+            "prompt": "向用户 {user_name} 介绍 /ob2qb req_bind 与 ack_bind 的绑定全流程与操作步骤。"
+          }
+        },
+        {
+          "id": "help:latex",
+          "label": "LaTeX 公式语法",
+          "action": "callback",
+          "style": "success",
+          "data": {
+            "prompt": "请给用户 {user_name} 举例说明行内公式 $..$ 与块级公式 $$..$$ 在本插件中的使用示例与技巧。"
+          }
+        }
+      ]
+    }
+  ]
+}
+```
+
+#### 场景 3：互动猜拳游戏（自带再来一局循环）
+点击任意出拳，插件瞬间随机结算并给出胜负，同时自动附加下一局猜拳卡片：
+```json
+{
+  "markdown": "🎮 **猜拳小游戏（剪刀石头布）**\n我已经想好出什么了，请选择你的手势：",
+  "timeout": 60,
+  "action_rows": [
+    {
+      "buttons": [
+        {
+          "id": "rps:rock",
+          "label": "✊ 石头",
+          "action": "callback",
+          "style": "primary",
+          "data": { "game": "rps", "choice": "rock" }
+        },
+        {
+          "id": "rps:scissors",
+          "label": "✌️ 剪刀",
+          "action": "callback",
+          "style": "success",
+          "data": { "game": "rps", "choice": "scissors" }
+        },
+        {
+          "id": "rps:paper",
+          "label": "🖐️ 布",
+          "action": "callback",
+          "style": "danger",
+          "data": { "game": "rps", "choice": "paper" }
+        }
+      ]
+    }
+  ]
+}
+```
+
+#### 场景 4：互动答题与考题自测
+```json
+{
+  "markdown": "💡 **每日知识小测验**\n问题：光在真空中传播的速度大约是多少？",
+  "action_rows": [
+    {
+      "buttons": [
+        {
+          "label": "A. 30 万米/秒",
+          "action": "callback",
+          "data": {
+            "rule": "quiz",
+            "selected": "A",
+            "correct": "C",
+            "explanation": "真空中光速约为 30 万公里/秒，即 3×10^8 米/秒。"
+          }
+        },
+        {
+          "label": "B. 300 万公里/秒",
+          "action": "callback",
+          "data": {
+            "rule": "quiz",
+            "selected": "B",
+            "correct": "C",
+            "explanation": "多写了一个零，真空中光速约为 30 万公里/秒。"
+          }
+        },
+        {
+          "label": "C. 30 万公里/秒",
+          "action": "callback",
+          "style": "success",
+          "data": {
+            "rule": "quiz",
+            "selected": "C",
+            "correct": "C",
+            "score": 10,
+            "explanation": "回答正确！真空中光速为通用物理常量 c ≈ 299,792 km/s。"
+          }
+        }
+      ]
+    }
+  ]
+}
+```
 
 ## Markdown 与 LaTeX 检测说明
 

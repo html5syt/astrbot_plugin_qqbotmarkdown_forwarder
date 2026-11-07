@@ -129,6 +129,12 @@ class FakeEvent:
     def plain_result(self, text):
         return SimpleNamespace(text=text)
 
+    def get_sender_name(self):
+        return "玩家一号"
+
+    def get_sender_id(self):
+        return "999888"
+
 
 class FakeReport:
     attempts = ()
@@ -143,9 +149,22 @@ class FakeReport:
 
 
 def make_plugin(report, enabled=True):
+    from services.game_engine import InteractiveGameEngine
     from services.interactive import ButtonLifecycleManager
 
+    fake_provider = SimpleNamespace(
+        text_chat=AsyncMock(
+            return_value=SimpleNamespace(
+                completion_text="这是大模型根据预设 Prompt 生成的回复。"
+            )
+        )
+    )
+    context = SimpleNamespace(
+        get_using_provider=Mock(return_value=fake_provider)
+    )
+
     return SimpleNamespace(
+        context=context,
         settings=SimpleNamespace(
             enabled=enabled,
             only_plain_text=True,
@@ -167,6 +186,8 @@ def make_plugin(report, enabled=True):
         ),
         forwarder=SimpleNamespace(forward=AsyncMock(return_value=report)),
         button_lifecycle=ButtonLifecycleManager(),
+        interaction_engine=InteractiveGameEngine(),
+        game_engine=InteractiveGameEngine(),
         _mark_command_result=Mock(),
     )
 
@@ -233,6 +254,44 @@ class MainLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0].text, "处理成功！")
+
+    async def test_button_triggers_llm_prompt(self):
+        plugin = make_plugin(FakeReport(intercept=True))
+        event = FakeEvent([], platform="qq_official")
+        event.get_button_interaction = Mock(
+            return_value=SimpleNamespace(
+                action_id="ob2qb:prompt_btn",
+                data={
+                    "prompt": "用户 {user_name} 触发了总结。",
+                    "system_prompt": "角色：助手",
+                },
+            )
+        )
+
+        results = []
+        async for item in MAIN_MODULE.Main.handle_button_action(plugin, event):
+            results.append(item)
+
+        self.assertEqual(len(results), 1)
+        self.assertIn("这是大模型根据预设 Prompt", results[0].text)
+
+    async def test_button_rps_game_returns_next_layout_chain(self):
+        plugin = make_plugin(FakeReport(intercept=True))
+        event = FakeEvent([], platform="qq_official")
+        event.get_button_interaction = Mock(
+            return_value=SimpleNamespace(
+                action_id="ob2qb:rps_rock",
+                data={"game": "rps", "choice": "rock", "replay_button": True},
+            )
+        )
+
+        results = []
+        async for item in MAIN_MODULE.Main.handle_button_action(plugin, event):
+            results.append(item)
+
+        self.assertEqual(len(results), 2)
+        # 确认返回了包含链式组件的交互卡片（结果 + 再来一局按钮）
+        self.assertTrue(hasattr(results[1], "chain"))
 
 
 if __name__ == "__main__":

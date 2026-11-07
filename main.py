@@ -17,6 +17,7 @@ from .services.binding_store import (
 )
 from .services.detector import MarkdownDetector
 from .services.forwarder import MarkdownForwarder
+from .services.game_engine import InteractiveDecisionEngine
 from .services.interactive import (
     ButtonLifecycleManager,
     InteractivePayloadError,
@@ -89,6 +90,8 @@ class Main(Star):
             timeout_seconds=self.settings.forward_timeout_seconds,
         )
         self.button_lifecycle = ButtonLifecycleManager()
+        self.interaction_engine = InteractiveDecisionEngine()
+        self.game_engine = self.interaction_engine
 
         if self.detector.invalid_patterns:
             logger.warning(
@@ -306,10 +309,11 @@ class Main(Star):
         event: AstrMessageEvent,
         layout: str,
     ):
-        """发送排版丰富的 Markdown 消息与交互按钮（支持图文与按钮混排）。
+        """发送排版丰富的 Markdown 消息与交互按钮（支持图文与多轮决策按钮混排）。
 
         当需要向用户主动发送带有可点击按钮（如回调按钮、URL
         链接按钮）以及 Markdown 图文内容时调用。
+        适用于各类互动游戏、客服导流菜单、FAQ 帮助导航及审批工作流。
         无论插件是否开启自动转发功能，本工具均可正常生效。
 
         Args:
@@ -384,8 +388,10 @@ class Main(Star):
         - buttons[i].action: "callback"（触发事件回调）或 "url"（跳转外链）。
         - buttons[i].url: 当 action 为 "url" 时的目标链接。
         - buttons[i].data: 当 action 为 "callback" 时的回传参数字典。
+          - prompt (string, 可选): 触发来源 Bot 的 LLM 指令模板。
+          - next_layout (object, 可选): 跳转的下一级交互卡片（支持多级菜单等）。
+          - reply (string, 可选): 点击后由 Bot 即时发送给用户的文字反馈。
         - buttons[i].style: 可选 primary, secondary, success, danger。
-        - buttons[i].reply: 用户点击回调按钮后机器人自动回复的确认文字。
         """
 
         self._mark_command_result(event)
@@ -447,7 +453,7 @@ class Main(Star):
 
     @button_action_filter()
     async def handle_button_action(self, event: AstrMessageEvent):
-        """处理交互按钮的回调生命周期与用户反馈。"""
+        """处理交互按钮的回调生命周期、Prompt 动态触发与多轮决策流转。"""
 
         get_interaction = getattr(event, "get_button_interaction", None)
         interaction = get_interaction() if callable(get_interaction) else None
@@ -469,8 +475,94 @@ class Main(Star):
             return
 
         logger.info(f"收到交互按钮点击回调: action_id={action_id}, data={data}")
-        resp = self.button_lifecycle.resolve_callback_response(action_id, data)
-        yield event.plain_result(resp)
+
+        # 提取用户信息用于 Prompt 与决策模板动态注入
+        user_name = ""
+        get_sender_name = getattr(event, "get_sender_name", None)
+        if callable(get_sender_name):
+            try:
+                user_name = str(get_sender_name())
+            except Exception:
+                user_name = ""
+        user_id = str(getattr(event, "get_sender_id", lambda: "")() or "")
+
+        # 1. 通过通用多轮决策引擎评估动作
+        decision = self.interaction_engine.evaluate(
+            action_id, data, user_name=user_name, user_id=user_id
+        )
+
+        # 2. 如果包含预设 Prompt，触发当前会话对应的来源 Bot LLM 动态回复
+        if decision.use_llm:
+            get_provider = getattr(self.context, "get_using_provider", None)
+            provider = (
+                get_provider(event.unified_msg_origin)
+                if callable(get_provider)
+                else None
+            )
+            if provider is not None and hasattr(provider, "text_chat"):
+                try:
+                    logger.info(
+                        "交互按钮触发预设 Prompt 调用 LLM: "
+                        f"{decision.prompt[:50]}..."
+                    )
+                    kw: dict[str, Any] = {}
+                    if decision.system_prompt:
+                        kw["system_prompt"] = decision.system_prompt
+                    llm_resp = await provider.text_chat(
+                        prompt=decision.prompt,
+                        session_id=getattr(event, "session_id", None),
+                        **kw,
+                    )
+                    completion = getattr(llm_resp, "completion_text", None)
+                    if completion:
+                        yield event.plain_result(str(completion))
+
+                        # 若同时声明了下一级状态机卡片，将下一级卡片连带呈现
+                        if decision.next_layout:
+                            try:
+                                next_p = parse_interactive_payload(
+                                    decision.next_layout
+                                )
+                                next_c = build_astbot_message_chain(next_p)
+                                elem = getattr(next_c, "chain", [next_c])
+                                yield event.chain_result(elem)
+                            except Exception as exc:
+                                logger.warning(
+                                    f"渲染伴随 next_layout 失败: {exc!s}"
+                                )
+                        return
+                except Exception as exc:
+                    logger.warning(f"交互按钮触发 LLM 回复失败: {exc!s}")
+
+        # 3. 如果决策包含状态机卡片跳转（Next Layout），直接呈现新交互卡片
+        if decision.next_layout:
+            try:
+                next_payload = parse_interactive_payload(decision.next_layout)
+                next_chain = build_astbot_message_chain(next_payload)
+                elements = getattr(next_chain, "chain", None)
+                if elements is None:
+                    elements = (
+                        [next_chain]
+                        if not isinstance(next_chain, list)
+                        else next_chain
+                    )
+                if decision.text:
+                    yield event.plain_result(decision.text)
+                yield event.chain_result(elements)
+                return
+            except Exception as exc:
+                logger.warning(f"渲染交互卡片 next_layout 失败: {exc!s}")
+
+        # 4. 如果通用决策引擎有明确输出（如规则判定、分支说明等）
+        if decision.text:
+            yield event.plain_result(decision.text)
+            return
+
+        # 5. 常规预设反馈回退
+        response_text = self.button_lifecycle.resolve_callback_response(
+            action_id, data
+        )
+        yield event.plain_result(response_text)
 
     @staticmethod
     def _mark_command_result(event: AstrMessageEvent) -> None:
