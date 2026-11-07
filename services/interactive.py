@@ -40,11 +40,12 @@ class ImageSegment:
 class ButtonSegment:
     id: str
     label: str
-    action: str  # "callback" 或 "url"
+    action: str  # "callback"、"url" 或 "command"
     url: str = ""
     data: dict[str, Any] = field(default_factory=dict)
     style: str = "primary"  # primary, secondary, success, danger
     reply: str = ""  # 点击回调时的快速回复文本
+    visited_label: str = ""  # 点击后的置灰/已点击文本
     type: str = "button"
 
     def to_dict(self) -> dict[str, Any]:
@@ -61,6 +62,8 @@ class ButtonSegment:
             res["data"] = self.data
         if self.reply:
             res["reply"] = self.reply
+        if self.visited_label:
+            res["visited_label"] = self.visited_label
         return res
 
 
@@ -125,6 +128,9 @@ class InteractivePayload:
                     for btn in seg.buttons:
                         if btn.action == "url":
                             btn_strs.append(f"[{btn.label}]({btn.url})")
+                        elif btn.action == "command":
+                            cmd = btn.data.get("command", "")
+                            btn_strs.append(f"[{btn.label}: {cmd}]")
                         else:
                             btn_strs.append(f"[{btn.label}]")
                     parts.append(" ".join(btn_strs))
@@ -211,8 +217,13 @@ def parse_interactive_payload(raw_data: str | dict | list) -> InteractivePayload
         # 形式一：结构化配置对象
         default_timeout = _extract_timeout(parsed)
 
-        # 1. 收集 Markdown 文本
-        md_text = parsed.get("markdown") or parsed.get("text") or parsed.get("content")
+        # 1. 收集 Markdown 文本（兼容 markdown 为布尔值时取 text/content）
+        raw_md = parsed.get("markdown")
+        if isinstance(raw_md, str) and raw_md:
+            md_text = raw_md
+        else:
+            md_text = parsed.get("text") or parsed.get("content") or ""
+
         if md_text:
             segments.append(MarkdownSegment(content=str(md_text)))
 
@@ -232,23 +243,50 @@ def parse_interactive_payload(raw_data: str | dict | list) -> InteractivePayload
         elif isinstance(images, str) and images:
             segments.append(ImageSegment(url=images))
 
-        # 3. 收集按钮行
+        # 3. 收集按钮行（支持二维数组 [[btn1, btn2], [btn3]] 或一维数组）
         btn_seq = 1
         if "action_rows" in parsed and isinstance(parsed["action_rows"], list):
             for row_data in parsed["action_rows"]:
                 if isinstance(row_data, dict):
-                    row, btn_seq = _parse_action_row(
-                        row_data, btn_seq, default_timeout=default_timeout
-                    )
-                    if row.buttons:
-                        segments.append(row)
+                    raw_b = row_data.get("buttons")
+                    if (
+                        isinstance(raw_b, list)
+                        and raw_b
+                        and isinstance(raw_b[0], list)
+                    ):
+                        for sub_row in raw_b:
+                            sub_dict = dict(row_data)
+                            sub_dict["buttons"] = sub_row
+                            row, btn_seq = _parse_action_row(
+                                sub_dict,
+                                btn_seq,
+                                default_timeout=default_timeout,
+                            )
+                            if row.buttons:
+                                segments.append(row)
+                    else:
+                        row, btn_seq = _parse_action_row(
+                            row_data, btn_seq, default_timeout=default_timeout
+                        )
+                        if row.buttons:
+                            segments.append(row)
         elif "buttons" in parsed and isinstance(parsed["buttons"], list):
-            # 扁平按钮列表，支持单行配置
-            row, btn_seq = _parse_action_row(
-                parsed, btn_seq, default_timeout=default_timeout
-            )
-            if row.buttons:
-                segments.append(row)
+            raw_buttons = parsed["buttons"]
+            if raw_buttons and isinstance(raw_buttons[0], list):
+                for sub_row in raw_buttons:
+                    if isinstance(sub_row, list):
+                        row_dict = {"buttons": sub_row}
+                        row, btn_seq = _parse_action_row(
+                            row_dict, btn_seq, default_timeout=default_timeout
+                        )
+                        if row.buttons:
+                            segments.append(row)
+            else:
+                row, btn_seq = _parse_action_row(
+                    parsed, btn_seq, default_timeout=default_timeout
+                )
+                if row.buttons:
+                    segments.append(row)
 
     if not segments:
         raise InteractivePayloadError(
@@ -282,23 +320,43 @@ def _parse_action_row(
         btn_id = str(item.get("id") or f"ob2qb:btn_{seq}")
         seq += 1
         label = str(item.get("label") or item.get("text") or "按钮")
+        visited_label = str(item.get("visited_label") or "")
         url = str(item.get("url") or item.get("link") or "")
-        btn_data = item.get("data") if isinstance(item.get("data"), dict) else {}
         reply = str(item.get("reply") or "")
         style = str(item.get("style") or "primary").lower()
         if style not in {"primary", "secondary", "success", "danger"}:
             style = "primary"
 
-        # 判断动作类型
-        action = str(item.get("action") or "").lower()
-        if not action:
+        # 判断动作类型（兼容 action / type 为 command, callback, url）
+        action = str(item.get("action") or item.get("type") or "").lower()
+        cmd_val = item.get("command")
+        if action in {"command", "cmd"} or cmd_val:
+            action = "command"
+        elif action in {"url", "link"}:
+            action = "url"
+        elif not action:
             action = "url" if url else "callback"
 
-        if action in {"url", "link"}:
-            action = "url"
-            if not url:
-                # 若无 URL 则安全降级为 callback
-                action = "callback"
+        # 规范化 data 字段（兼容字符串、字典等）
+        raw_data = item.get("data")
+        btn_data: dict[str, Any] = {}
+        if isinstance(raw_data, dict):
+            btn_data = dict(raw_data)
+        elif isinstance(raw_data, str) and raw_data:
+            if action == "command":
+                btn_data = {"command": raw_data, "data": raw_data}
+            else:
+                btn_data = {"data": raw_data, "text": raw_data}
+        elif raw_data is not None:
+            btn_data = {"data": raw_data}
+
+        if action == "command" and "command" not in btn_data:
+            if cmd_val:
+                btn_data["command"] = str(cmd_val)
+            elif url:
+                btn_data["command"] = url
+            elif raw_data:
+                btn_data["command"] = str(raw_data)
 
         buttons.append(
             ButtonSegment(
@@ -309,6 +367,7 @@ def _parse_action_row(
                 data=btn_data,
                 style=style,
                 reply=reply,
+                visited_label=visited_label,
             )
         )
 
@@ -366,12 +425,21 @@ def build_astbot_message_chain(payload: InteractivePayload) -> Any:
                         }
                         chosen_style = style_map.get(b.style)
 
+                    cb_data = dict(b.data)
+                    if b.reply and "reply" not in cb_data:
+                        cb_data["reply"] = b.reply
+
                     if b.action == "url":
                         btn_action = Button.UrlAction(url=b.url)
+                    elif b.action == "command":
+                        cmd_act_cls = getattr(Button, "CommandAction", None)
+                        if cmd_act_cls is not None:
+                            btn_action = cmd_act_cls(
+                                command=cb_data.get("command", "")
+                            )
+                        else:
+                            btn_action = Button.CallbackAction(data=cb_data)
                     else:
-                        cb_data = dict(b.data)
-                        if b.reply and "reply" not in cb_data:
-                            cb_data["reply"] = b.reply
                         btn_action = Button.CallbackAction(data=cb_data)
 
                     btn_kwargs = {
@@ -412,25 +480,34 @@ def build_qq_keyboard_payload(payload: InteractivePayload) -> dict[str, Any] | N
             is_blue = btn.style in {"primary", "blue"}
             is_red = btn.style in {"danger", "red"}
             style_code = 1 if is_blue else (2 if is_red else 0)
-            is_url = btn.action == "url"
 
-            if is_url:
+            # QQ Bot Action Type: 0: 跳转, 1: 回调, 2: 指令
+            if btn.action == "url":
+                action_type = 0
                 action_data = btn.url
+            elif btn.action == "command":
+                action_type = 2
+                action_data = str(
+                    btn.data.get("command") or btn.data.get("data") or ""
+                )
             else:
+                action_type = 1
                 cb_data = dict(btn.data)
                 if btn.reply and "reply" not in cb_data:
                     cb_data["reply"] = btn.reply
                 action_data = json.dumps(cb_data, ensure_ascii=False)
 
+            visited = btn.visited_label if btn.visited_label else btn.label
+
             button_item = {
                 "id": btn.id,
                 "render_data": {
                     "label": btn.label,
-                    "visited_label": btn.label,
+                    "visited_label": visited,
                     "style": style_code,
                 },
                 "action": {
-                    "type": 0 if is_url else 2,  # 0: 跳转, 2: 回调
+                    "type": action_type,
                     "permission": {"type": 2},  # 所有人可见/可点击
                     "data": action_data,
                     "click_limit": 10,

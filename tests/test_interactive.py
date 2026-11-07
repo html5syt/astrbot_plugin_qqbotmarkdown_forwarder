@@ -102,6 +102,74 @@ class InteractiveBuilderTests(unittest.TestCase):
         self.assertEqual(payload.images[0].url, "https://example.com/pic2.png")
         self.assertTrue(payload.action_rows[0].buttons[0].id.startswith("ob2qb:btn_"))
 
+    def test_parse_user_reported_payload_with_boolean_markdown_and_2d_buttons(self):
+        raw_payload = {
+            "markdown": True,
+            "text": "## 按钮测试\n\n主人点一下试试呀~",
+            "timeout": 180,
+            "buttons": [
+                [
+                    {
+                        "id": "test_cmd_btn_1",
+                        "text": "指令按钮~",
+                        "type": "command",
+                        "data": "/heartflow",
+                        "timeout": 180,
+                        "visited_label": "已点击啦",
+                    },
+                    {
+                        "id": "test_callback_btn_1",
+                        "text": "回调按钮❤️",
+                        "type": "callback",
+                        "data": "test_callback_data",
+                        "timeout": 180,
+                        "visited_label": "点过了呀",
+                    },
+                ]
+            ],
+        }
+
+        payload = parse_interactive_payload(raw_payload)
+
+        # 1. 验证 markdown: true 能够安全回退到 text 内容，而不是输出 "True"
+        self.assertIn("## 按钮测试", payload.full_markdown_text)
+        self.assertNotEqual(payload.full_markdown_text, "True")
+
+        # 2. 验证二维数组 buttons 成功解析出一行两个按钮
+        self.assertEqual(len(payload.action_rows), 1)
+        row = payload.action_rows[0]
+        self.assertEqual(len(row.buttons), 2)
+        self.assertEqual(row.action_timeout, 180)
+
+        # 3. 验证指令按钮解析与 visited_label
+        btn1 = row.buttons[0]
+        self.assertEqual(btn1.id, "test_cmd_btn_1")
+        self.assertEqual(btn1.label, "指令按钮~")
+        self.assertEqual(btn1.action, "command")
+        self.assertEqual(btn1.visited_label, "已点击啦")
+        self.assertEqual(btn1.data.get("command"), "/heartflow")
+
+        # 4. 验证字符串 data 容错与回调按钮解析
+        btn2 = row.buttons[1]
+        self.assertEqual(btn2.id, "test_callback_btn_1")
+        self.assertEqual(btn2.label, "回调按钮❤️")
+        self.assertEqual(btn2.action, "callback")
+        self.assertEqual(btn2.visited_label, "点过了呀")
+        self.assertEqual(btn2.data.get("data"), "test_callback_data")
+
+        # 5. 验证 QQ 官方 inline keyboard 的映射 (command -> type 2, callback -> type 1)
+        kb = build_qq_keyboard_payload(payload)
+        self.assertIsNotNone(kb)
+        kb_buttons = kb["content"]["rows"][0]["buttons"]
+        self.assertEqual(len(kb_buttons), 2)
+
+        self.assertEqual(kb_buttons[0]["action"]["type"], 2)  # 指令
+        self.assertEqual(kb_buttons[0]["action"]["data"], "/heartflow")
+        self.assertEqual(kb_buttons[0]["render_data"]["visited_label"], "已点击啦")
+
+        self.assertEqual(kb_buttons[1]["action"]["type"], 1)  # 回调
+        self.assertEqual(kb_buttons[1]["render_data"]["visited_label"], "点过了呀")
+
     def test_markdown_code_fence_stripping(self):
         raw = "```json\n{\"markdown\": \"正文\"}\n```"
         payload = parse_interactive_payload(raw)
@@ -149,7 +217,7 @@ class InteractiveBuilderTests(unittest.TestCase):
         self.assertEqual(btn1["action"]["data"], "https://astrbot.app")
 
         btn2 = buttons[1]
-        self.assertEqual(btn2["action"]["type"], 2)
+        self.assertEqual(btn2["action"]["type"], 1)  # callback type 1
         self.assertEqual(btn2["render_data"]["style"], 2)  # danger
         parsed_data = json.loads(btn2["action"]["data"])
         self.assertEqual(parsed_data["key"], "val")
