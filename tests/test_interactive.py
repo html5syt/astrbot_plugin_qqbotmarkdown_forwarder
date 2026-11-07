@@ -61,6 +61,24 @@ class InteractiveBuilderTests(unittest.TestCase):
         self.assertEqual(url_btn.action, "url")
         self.assertEqual(url_btn.url, "https://example.com")
 
+    def test_top_level_timeout_and_alias_inheritance(self):
+        payload_data = {
+            "markdown": "测试继承",
+            "timeout": 90,
+            "action_rows": [
+                {
+                    "buttons": [{"label": "继承90秒", "action": "callback"}]
+                },
+                {
+                    "expire_seconds": 30,
+                    "buttons": [{"label": "自定义30秒", "action": "callback"}]
+                },
+            ],
+        }
+        payload = parse_interactive_payload(payload_data)
+        self.assertEqual(payload.action_rows[0].action_timeout, 90)
+        self.assertEqual(payload.action_rows[1].action_timeout, 30)
+
     def test_parse_sequential_segments_list(self):
         segments = [
             {"type": "markdown", "content": "前言介绍"},
@@ -151,6 +169,9 @@ class InteractiveBuilderTests(unittest.TestCase):
 
         resp3 = manager.resolve_callback_response("ob2qb:test", {})
         self.assertEqual(resp3, "已触发操作：ob2qb:test")
+
+        resp4 = manager.resolve_callback_response("btn_4", {"command": "/help"})
+        self.assertEqual(resp4, "执行指令：/help")
 
 
 if __name__ == "__main__":

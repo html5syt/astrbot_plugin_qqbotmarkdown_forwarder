@@ -148,6 +148,26 @@ def _strip_markdown_code_fences(text: str) -> str:
     return text.strip()
 
 
+def _extract_timeout(data: dict[str, Any]) -> int | None:
+    timeout_val = (
+        data.get("action_timeout")
+        if data.get("action_timeout") is not None
+        else (
+            data.get("timeout")
+            if data.get("timeout") is not None
+            else data.get("expire_seconds")
+        )
+    )
+    if timeout_val is not None:
+        try:
+            val = int(timeout_val)
+            if val > 0:
+                return val
+        except (ValueError, TypeError):
+            pass
+    return None
+
+
 def parse_interactive_payload(raw_data: str | dict | list) -> InteractivePayload:
     """将字符串或字典/列表结构解析为标准 InteractivePayload。"""
 
@@ -189,6 +209,8 @@ def parse_interactive_payload(raw_data: str | dict | list) -> InteractivePayload
             return parse_interactive_payload(parsed["segments"])
 
         # 形式一：结构化配置对象
+        default_timeout = _extract_timeout(parsed)
+
         # 1. 收集 Markdown 文本
         md_text = parsed.get("markdown") or parsed.get("text") or parsed.get("content")
         if md_text:
@@ -215,12 +237,16 @@ def parse_interactive_payload(raw_data: str | dict | list) -> InteractivePayload
         if "action_rows" in parsed and isinstance(parsed["action_rows"], list):
             for row_data in parsed["action_rows"]:
                 if isinstance(row_data, dict):
-                    row, btn_seq = _parse_action_row(row_data, btn_seq)
+                    row, btn_seq = _parse_action_row(
+                        row_data, btn_seq, default_timeout=default_timeout
+                    )
                     if row.buttons:
                         segments.append(row)
         elif "buttons" in parsed and isinstance(parsed["buttons"], list):
-            # 扁平按钮列表，支持按 row 切分或单行
-            row, btn_seq = _parse_action_row(parsed, btn_seq)
+            # 扁平按钮列表，支持单行配置
+            row, btn_seq = _parse_action_row(
+                parsed, btn_seq, default_timeout=default_timeout
+            )
             if row.buttons:
                 segments.append(row)
 
@@ -233,21 +259,18 @@ def parse_interactive_payload(raw_data: str | dict | list) -> InteractivePayload
 
 
 def _parse_action_row(
-    data: dict[str, Any], start_seq: int
+    data: dict[str, Any],
+    start_seq: int,
+    *,
+    default_timeout: int | None = None,
 ) -> tuple[ActionRowSegment, int]:
     raw_buttons = data.get("buttons") or []
     if not isinstance(raw_buttons, list):
         raw_buttons = []
 
-    timeout_val = data.get("action_timeout")
-    action_timeout = None
-    if timeout_val is not None:
-        try:
-            val = int(timeout_val)
-            if val > 0:
-                action_timeout = val
-        except (ValueError, TypeError):
-            pass
+    action_timeout = _extract_timeout(data)
+    if action_timeout is None:
+        action_timeout = default_timeout
 
     fallback_text = str(data.get("fallback_text") or "")
 
@@ -456,6 +479,8 @@ class ButtonLifecycleManager:
             return str(data["reply"])
         if "text" in data and data["text"]:
             return str(data["text"])
+        if "command" in data and data["command"]:
+            return f"执行指令：{data['command']}"
         if "action" in data and data["action"]:
             return f"已处理操作：{data['action']}"
         return f"已触发操作：{action_id}"
