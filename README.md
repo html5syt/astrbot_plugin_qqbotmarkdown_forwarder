@@ -7,6 +7,7 @@
 **为 OneBot 与 Satori 平台接入 QQ 官方机器人的原生 Markdown 渲染与交互式按钮**
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.26%2C%3C5-blue.svg)](https://github.com/Soulter/AstrBot)
+[![Version](https://img.shields.io/badge/version-v1.2.0-blue.svg)](metadata.yaml)
 [![Python](https://img.shields.io/badge/Python-3.12%2B-green.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-orange.svg)](LICENSE)
 
