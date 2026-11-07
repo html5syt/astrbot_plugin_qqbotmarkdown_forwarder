@@ -73,12 +73,31 @@ class InteractiveGameEngineTests(unittest.TestCase):
         self.assertIsNotNone(decision.next_layout)
         self.assertIn("想要再来一局吗？", decision.next_layout["markdown"])
 
+    def test_rps_fuzzy_detection_by_action_id(self):
+        # 兼容 Bot 未写明 game="rps"，只传了 rps_rock 等 ID 的场景
+        d1 = self.engine.evaluate("rps_rock", {})
+        expected1 = "双方" if "平局" in d1.text else "你出了 ✊ 石头"
+        self.assertIn(expected1, d1.text)
+        self.assertIsNotNone(d1.next_layout)
+
+        d2 = self.engine.evaluate("rps_scissors", {})
+        expected2 = "双方" if "平局" in d2.text else "你出了 ✌️ 剪刀"
+        self.assertIn(expected2, d2.text)
+
+        d3 = self.engine.evaluate("rps_paper", {})
+        expected3 = "双方" if "平局" in d3.text else "你出了 🖐️ 布"
+        self.assertIn(expected3, d3.text)
+
+        d4 = self.engine.evaluate("btn_custom", {"data": "rps:rock"})
+        expected4 = "双方" if "平局" in d4.text else "你出了 ✊ 石头"
+        self.assertIn(expected4, d4.text)
+
     def test_dice_game_determination(self):
         data = {"game": "dice", "count": 2, "sides": 6}
         decision = self.engine.evaluate("btn_dice", data)
 
         self.assertFalse(decision.use_llm)
-        self.assertIn("🎲 **掷骰子对决", decision.text)
+        self.assertIn("🎲 **掷骰对决", decision.text)
         self.assertIn("你的点数：", decision.text)
         self.assertIn("Bot 点数：", decision.text)
 
@@ -91,7 +110,7 @@ class InteractiveGameEngineTests(unittest.TestCase):
             "score": 10,
         }
         dec1 = self.engine.evaluate("btn_q1", data_correct)
-        self.assertIn("✅ **回答正确！", dec1.text)
+        self.assertIn("✅ **校验/回答正确！", dec1.text)
         self.assertIn("+10 分", dec1.text)
 
         data_wrong = {
@@ -101,8 +120,8 @@ class InteractiveGameEngineTests(unittest.TestCase):
             "explanation": "正确答案应为选项 C。",
         }
         dec2 = self.engine.evaluate("btn_q2", data_wrong)
-        self.assertIn("❌ **很遗憾，回答错误！", dec2.text)
-        self.assertIn("正确项：`C`", dec2.text)
+        self.assertIn("❌ **校验/回答未通过！", dec2.text)
+        self.assertIn("预期项：`C`", dec2.text)
 
     def test_general_comparison_rule(self):
         data_win = {

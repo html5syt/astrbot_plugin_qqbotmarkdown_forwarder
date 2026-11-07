@@ -17,7 +17,7 @@ from .services.binding_store import (
 )
 from .services.detector import MarkdownDetector
 from .services.forwarder import MarkdownForwarder
-from .services.game_engine import InteractiveDecisionEngine
+from .services.interaction_engine import InteractionEngine
 from .services.interactive import (
     ButtonLifecycleManager,
     InteractivePayloadError,
@@ -90,7 +90,7 @@ class Main(Star):
             timeout_seconds=self.settings.forward_timeout_seconds,
         )
         self.button_lifecycle = ButtonLifecycleManager()
-        self.interaction_engine = InteractiveDecisionEngine()
+        self.interaction_engine = InteractionEngine()
         self.game_engine = self.interaction_engine
 
         if self.detector.invalid_patterns:
@@ -311,87 +311,82 @@ class Main(Star):
     ):
         """发送排版丰富的 Markdown 消息与交互按钮（支持图文与多轮决策按钮混排）。
 
-        当需要向用户主动发送带有可点击按钮（如回调按钮、URL
-        链接按钮）以及 Markdown 图文内容时调用。
-        适用于各类互动游戏、客服导流菜单、FAQ 帮助导航及审批工作流。
-        无论插件是否开启自动转发功能，本工具均可正常生效。
+        【Bot 核心指引】：
+        本工具发送后，插件后台已自动接管异步按钮回调！Bot 无需等待。
+        要实现不同的业务，只需在按钮的 data 中配置对应字段：
+        1. 猜拳对决小游戏：
+           在 data 中设置 {"game": "rps", "choice": "rock/scissors/paper"}，
+           或直接将按钮 ID 设为 rps_rock / rps_scissors / rps_paper。
+           插件会自动判定输赢并输出包含『再来一局』按钮的新卡片！
+        2. 唤醒大模型（你）继续多轮对话：
+           在 data 中配置 "prompt": "用户 {user_name} 点击了..."，
+           用户点击后插件会自动再次调用你生成回复！
+        3. 声明式卡片跳转（分级菜单、分步向导、剧情分支）：
+           在 data 中配置 "next_layout": { ... }，点击后直接无缝切换至下一级卡片。
+        4. 执行聊天指令：
+           设置 "type": "command", "data": "/指令"，点击后自动触发。
 
         Args:
             layout(string): 符合 JSON 格式的消息排版描述。详细规范如下：
 
         ## JSON 格式示例
 
-        ### 形式一：结构化配置对象
+        ### 形式一：猜拳互动对决小游戏示例
         ```json
         {
-          "markdown": "## 任务完成\\n已生成公式 $E=mc^2$ 与 **结论**。",
-          "images": ["https://example.com/banner.png"],
-          "action_rows": [
-            {
-              "action_timeout": 120,
-              "fallback_text": "不支持按钮请访问: https://docs.astrbot.app",
-              "buttons": [
-                {
-                  "id": "ob2qb:btn_confirm",
-                  "label": "确认完成",
-                  "action": "callback",
-                  "style": "primary",
-                  "data": {"action": "confirm", "task_id": "1001"},
-                  "reply": "已确认任务完成！"
-                },
-                {
-                  "id": "ob2qb:btn_docs",
-                  "label": "查看文档",
-                  "action": "url",
-                  "url": "https://docs.astrbot.app"
-                }
-              ]
-            }
+          "markdown": "🎮 **猜拳小游戏（剪刀石头布）**\\n请选择你的出拳：",
+          "timeout": 60,
+          "buttons": [
+            [
+              {"id": "rps_rock", "label": "✊ 石头", "action": "callback"},
+              {"id": "rps_scissors", "label": "✌️ 剪刀", "action": "callback"},
+              {"id": "rps_paper", "label": "🖐️ 布", "action": "callback"}
+            ]
           ]
         }
         ```
 
-        ### 形式二：顺序分段列表（适合精准图文按钮交错排版）
+        ### 形式二：客服与帮助多级菜单跳转示例
         ```json
-        [
-          {"type": "markdown", "content": "### 步骤 1：概览\\n说明文字。"},
-          {"type": "image", "url": "https://example.com/step1.png"},
-          {"type": "markdown", "content": "### 步骤 2：请选择操作"},
-          {
-            "type": "action_row",
-            "action_timeout": 60,
-            "buttons": [
+        {
+          "markdown": "您好！请选择需要咨询的服务类别：",
+          "buttons": [
+            [
               {
-                "id": "ob2qb:btn_agree",
-                "label": "同意协议",
+                "label": "售后服务",
                 "action": "callback",
-                "style": "success",
-                "data": {"agree": true}
-              },
-              {
-                "id": "ob2qb:btn_link",
-                "label": "阅读条款",
-                "action": "url",
-                "url": "https://example.com/terms"
+                "data": {
+                  "next_layout": {
+                    "markdown": "## 售后服务专区\\n请选择诉求：",
+                    "buttons": [
+                      {
+                        "label": "退款",
+                        "action": "callback",
+                        "data": {"prompt": "退款"},
+                      }
+                    ]
+                  }
+                }
               }
             ]
-          }
-        ]
+          ]
+        }
         ```
 
         ### 核心参数说明
-        - markdown / content: Markdown 文本（支持 LaTeX 公式、粗体等）。
+        - markdown / content: Markdown 文本（请勿传布尔值 true）。
         - images / image: 图片 URL 或本地文件绝对路径。
-        - action_rows: 按钮行数组（可选 action_timeout 和 fallback_text）。
-        - buttons[i].id: 按钮唯一标识（推荐以 ob2qb: 为前缀）。
-        - buttons[i].label: 按钮文本标签。
-        - buttons[i].action: "callback"（触发事件回调）或 "url"（跳转外链）。
-        - buttons[i].url: 当 action 为 "url" 时的目标链接。
-        - buttons[i].data: 当 action 为 "callback" 时的回传参数字典。
-          - prompt (string, 可选): 触发来源 Bot 的 LLM 指令模板。
-          - next_layout (object, 可选): 跳转的下一级交互卡片（支持多级菜单等）。
-          - reply (string, 可选): 点击后由 Bot 即时发送给用户的文字反馈。
-        - buttons[i].style: 可选 primary, secondary, success, danger。
+        - timeout / action_timeout: 超时秒数（默认 60~180 秒）。
+        - buttons: 按钮数组（支持一维列表或二维 [行[列]] 数组）。
+          - id: 按钮唯一标识（如 rps_rock）。
+          - label / text: 按钮标题。
+          - visited_label: 点击后置灰的文字。
+          - action / type: "callback"(回调), "url"(外链), "command"(指令)。
+          - data: 携带参数（支持字典或字符串）。
+            - prompt: 动态唤醒大模型的提示词（支持 {user_name} 变量）。
+            - next_layout: 点击后切换的下一级交互卡片结构。
+            - reply: 点击后的即时文本反馈。
+          - style: primary, secondary, success, danger。
         """
 
         self._mark_command_result(event)

@@ -1,7 +1,13 @@
-"""通用多轮交互与状态决策引擎。
+"""通用多轮交互决策与流转引擎（Universal Interaction Engine）。
 
-不仅适用于各类互动游戏（猜拳、掷骰、答题、抽签等），
-更原生支持客服导流、分级帮助菜单、问卷问答、审批工作流等多轮交互场景。
+完全解耦、无场景绑定的交互处理中枢。将按钮回调归一化为四大通用通道：
+1. 大模型动态驱动通道（Prompt-driven LLM Generation）
+2. 状态机卡片流转通道（Declarative State Machine & Next Layout）
+3. 通用规则与判定通道（Generalized Rule & Decision Matching）
+4. 即时模板反馈通道（Context-aware Template Reply）
+
+无论应用于客服分流菜单、帮助导航、问卷调研、审批流还是各类互动对决游戏，
+底层处理逻辑完全统一、高度泛化。
 """
 
 from __future__ import annotations
@@ -13,7 +19,7 @@ from typing import Any
 
 @dataclass(frozen=True, slots=True)
 class InteractionDecision:
-    """交互按钮决策结果。"""
+    """交互决策的标准结果对象。"""
 
     text: str = ""
     next_layout: dict[str, Any] | list[Any] | None = None
@@ -22,19 +28,19 @@ class InteractionDecision:
     system_prompt: str = ""
 
 
-class InteractiveDecisionEngine:
-    """处理通用多轮交互、状态机流转与大模型决策。"""
+class InteractionEngine:
+    """通用多轮交互决策引擎。"""
 
-    RPS_SYMBOLS = {
-        "石头": "✊ 石头",
-        "剪刀": "✌️ 剪刀",
-        "布": "🖐️ 布",
+    # 预置通用零和对决规则表（用于猜拳等泛化对称比对）
+    RPS_MAP = {
         "rock": "✊ 石头",
+        "石头": "✊ 石头",
         "scissors": "✌️ 剪刀",
+        "剪刀": "✌️ 剪刀",
         "paper": "🖐️ 布",
+        "布": "🖐️ 布",
     }
-
-    DICE_FACES = {1: "⚀", 2: "⚁", 3: "⚂", 4: "⚃", 5: "⚄", 6: "⚅"}
+    DICE_ICONS = {1: "⚀", 2: "⚁", 3: "⚂", 4: "⚃", 5: "⚄", 6: "⚅"}
 
     def evaluate(
         self,
@@ -44,26 +50,15 @@ class InteractiveDecisionEngine:
         user_name: str = "",
         user_id: str = "",
     ) -> InteractionDecision:
-        """评估用户点击的上下文数据，返回标准交互决策。"""
+        """多轮交互通用决策管线。按优先级进行多通道分流评估。"""
 
-        # 1. 优先检查是否需要触发大模型 Prompt（适用于客服、智能解答等）
+        # Stage 1: 归一化提取上下文变量池
+        context = self._build_context(action_id, data, user_name, user_id)
+
+        # Stage 2: 通道 1 - 声明式大模型 Prompt 动态接管通道
         raw_prompt = data.get("prompt")
         if raw_prompt:
-            context_vars = {
-                "user_name": user_name or "用户",
-                "user_id": user_id or "",
-                "action_id": action_id,
-                "label": str(data.get("label") or ""),
-                "action": str(data.get("action") or action_id),
-                "choice": str(data.get("choice") or data.get("selected") or ""),
-                "value": str(data.get("value") or ""),
-            }
-            # 扩展传入的其他标量字段
-            for k, v in data.items():
-                if isinstance(v, (str, int, float, bool)) and k not in context_vars:
-                    context_vars[k] = str(v)
-
-            formatted_prompt = self._safe_format(str(raw_prompt), context_vars)
+            formatted_prompt = self._safe_format(str(raw_prompt), context)
             return InteractionDecision(
                 use_llm=True,
                 prompt=formatted_prompt,
@@ -71,55 +66,134 @@ class InteractiveDecisionEngine:
                 next_layout=data.get("next_layout"),
             )
 
-        # 2. 状态机卡片跳转（适用于多轮菜单、客服分支向导、多步审批、分支剧情等）
+        # Stage 3: 通道 2 - 声明式多轮卡片状态流转通道（next_layout）
         next_layout = data.get("next_layout")
-        if next_layout and not any(k in data for k in ("game", "rule")):
+        has_specific_rule = any(
+            k in data for k in ("rule", "game", "verify", "compare", "pool")
+        )
+        if next_layout and not has_specific_rule:
             msg = str(
                 data.get("reply")
                 or data.get("text")
-                or f"已选择：{data.get('action') or action_id}"
+                or f"已处理操作：{context.get('action')}"
             )
-            return InteractionDecision(text=msg, next_layout=next_layout)
+            formatted_msg = self._safe_format(msg, context)
+            return InteractionDecision(text=formatted_msg, next_layout=next_layout)
 
-        # 3. 通用规则与多领域决策判定
-        mode = str(data.get("game") or data.get("rule") or "").lower()
+        # Stage 4: 通道 3 - 通用规则判定通道（零和博弈、比大小、答题校验、随机池）
+        rule_decision = self._evaluate_rule_channel(action_id, data, context)
+        if rule_decision is not None:
+            return rule_decision
 
-        # 3.1 猜拳对决
-        if mode in {"rps", "caiquan", "guess"}:
-            return self._handle_rps(data)
+        # Stage 5: 通道 4 - 即时模板反馈通道
+        reply_template = data.get("reply") or data.get("text")
+        if reply_template:
+            formatted_reply = self._safe_format(str(reply_template), context)
+            return InteractionDecision(
+                text=formatted_reply, next_layout=next_layout
+            )
 
-        # 3.2 掷骰子 / 拼点 / 随机数比对
-        if mode in {"dice", "roll", "touzi"}:
-            return self._handle_dice(data)
+        # Stage 6: 通道 5 - 通用兜底（无确定行为时自动构造上下文 Prompt 唤醒 Bot）
+        fallback_prompt = (
+            f"用户 {context.get('user_name')} 在对话中点击了交互按钮"
+            f"【{context.get('label') or action_id}】"
+            f"（操作标识: {action_id}，携带数据: {data or '无'}）。"
+            "请作为智能助理，根据上下文做出自然、契合情境的回应。"
+        )
+        return InteractionDecision(
+            use_llm=True,
+            prompt=fallback_prompt,
+            next_layout=next_layout,
+        )
 
-        # 3.3 答题闯关 / 表单比对 / 问答考核
-        if mode in {"quiz", "question", "verify", "dati"}:
-            return self._handle_quiz(data)
-
-        # 3.4 随机分派 / 抽签 / 抽卡 / 奖池
-        if mode in {"draw", "lottery", "pick", "assign", "chouka"}:
-            return self._handle_draw(data)
-
-        # 3.5 通用数值或条件比对（比大小、积分比对、满意度评价等）
-        if mode in {"compare", "bidaxiao"}:
-            return self._handle_compare(data)
-
-        # 4. 常规文本反馈回退
-        return InteractionDecision(text="")
+    def _build_context(
+        self,
+        action_id: str,
+        data: dict[str, Any],
+        user_name: str,
+        user_id: str,
+    ) -> dict[str, str]:
+        """构建平铺的上下文参数池，供模板与 Prompt 自由插值引用。"""
+        context: dict[str, str] = {
+            "user_name": user_name or "用户",
+            "user_id": user_id or "",
+            "action_id": action_id,
+            "action": str(data.get("action") or action_id),
+            "label": str(data.get("label") or data.get("text") or ""),
+            "choice": str(data.get("choice") or data.get("selected") or ""),
+            "value": str(data.get("value") or ""),
+        }
+        for k, v in data.items():
+            if isinstance(v, (str, int, float, bool)) and k not in context:
+                context[k] = str(v)
+        return context
 
     def _safe_format(self, template: str, context: dict[str, str]) -> str:
-        """安全格式化模板，避免因未知占位符引发 KeyError。"""
+        """安全模板变量替换，自动替换 {var} 占位符。"""
         result = template
         for k, v in context.items():
             result = result.replace(f"{{{k}}}", v)
         return result
 
-    def _handle_rps(self, data: dict[str, Any]) -> InteractionDecision:
-        """处理猜拳（剪刀石头布）。"""
+    def _evaluate_rule_channel(
+        self, action_id: str, data: dict[str, Any], context: dict[str, str]
+    ) -> InteractionDecision | None:
+        """通用规则计算器：将猜拳、掷骰、答题、抽签等归一化为规则运算。"""
+        mode = str(data.get("rule") or data.get("game") or "").lower()
+
+        # 3.1 零和对称博弈规则（猜拳/RPS，支持显式规则或 action_id 智能模糊识别）
+        rps_choice = self._extract_rps_choice(action_id, data)
+        if rps_choice or mode in {"rps", "caiquan", "guess", "match"}:
+            return self._handle_rps_rule(data, rps_choice)
+
+        # 3.2 离散随机/掷骰规则
+        if mode in {"dice", "roll", "touzi"} or "dice" in action_id.lower():
+            return self._handle_dice_rule(data)
+
+        # 3.3 条件等值校验规则（答题自测、表单确认、验证比对）
+        if mode in {"verify", "quiz", "question", "check", "dati"}:
+            return self._handle_verify_rule(data, context)
+
+        # 3.4 随机池抽取规则（分派专员、随机分支、抽签抽奖）
+        if mode in {"pick", "draw", "lottery", "random", "assign", "chouka"}:
+            return self._handle_pick_rule(data, context)
+
+        # 3.5 数值比较规则
+        if mode in {"compare", "bidaxiao"}:
+            return self._handle_compare_rule(data)
+
+        return None
+
+    def _extract_rps_choice(
+        self, action_id: str, data: dict[str, Any]
+    ) -> str | None:
+        """从 action_id 或 data 中模糊匹配对决手势（石头/剪刀/布）。"""
+        candidates = [
+            str(data.get("choice") or ""),
+            str(data.get("user_choice") or ""),
+            str(data.get("action") or ""),
+            str(data.get("data") or ""),
+            str(data.get("command") or ""),
+            str(data.get("game") or ""),
+            action_id,
+        ]
+        for c in candidates:
+            low = c.lower()
+            if any(k in low for k in ("rock", "石头", "shitou", "👊", "✊")):
+                return "rock"
+            if any(k in low for k in ("scissor", "剪刀", "jiandao", "✌", "✂")):
+                return "scissors"
+            if any(k in low for k in ("paper", "布", "bu", "🖐", "✋")):
+                return "paper"
+        return None
+
+    def _handle_rps_rule(
+        self, data: dict[str, Any], choice_key: str | None
+    ) -> InteractionDecision:
         user_choice = str(
-            data.get("choice") or data.get("user_choice") or "石头"
+            choice_key or data.get("choice") or data.get("user_choice") or "石头"
         ).lower()
-        user_opt = self.RPS_SYMBOLS.get(user_choice, "✊ 石头")
+        user_opt = self.RPS_MAP.get(user_choice, "✊ 石头")
         bot_opt = random.choice(["✊ 石头", "✌️ 剪刀", "🖐️ 布"])
 
         if user_opt == bot_opt:
@@ -133,6 +207,7 @@ class InteractiveDecisionEngine:
         else:
             result = f"😢 很遗憾你输了！你出了 {user_opt}，Bot 出了 {bot_opt}。"
 
+        # 自动附带再来一局的连续交互卡片
         next_layout = data.get("next_layout")
         if not next_layout and data.get("replay_button", True):
             next_layout = {
@@ -169,34 +244,30 @@ class InteractiveDecisionEngine:
 
         return InteractionDecision(text=result, next_layout=next_layout)
 
-    def _handle_dice(self, data: dict[str, Any]) -> InteractionDecision:
-        """处理掷骰子比大小对决。"""
+    def _handle_dice_rule(self, data: dict[str, Any]) -> InteractionDecision:
         count = max(1, min(int(data.get("count", 1)), 6))
         sides = max(2, min(int(data.get("sides", 6)), 100))
 
-        user_rolls = [random.randint(1, sides) for _ in range(count)]
-        user_total = sum(user_rolls)
-
-        bot_rolls = [random.randint(1, sides) for _ in range(count)]
-        bot_total = sum(bot_rolls)
+        u_rolls = [random.randint(1, sides) for _ in range(count)]
+        u_tot = sum(u_rolls)
+        b_rolls = [random.randint(1, sides) for _ in range(count)]
+        b_tot = sum(b_rolls)
 
         if sides == 6:
-            user_icons = "".join(self.DICE_FACES.get(r, str(r)) for r in user_rolls)
-            bot_icons = "".join(self.DICE_FACES.get(r, str(r)) for r in bot_rolls)
+            u_str = "".join(self.DICE_ICONS.get(r, str(r)) for r in u_rolls)
+            b_str = "".join(self.DICE_ICONS.get(r, str(r)) for r in b_rolls)
         else:
-            user_icons = str(user_rolls)
-            bot_icons = str(bot_rolls)
+            u_str, b_str = str(u_rolls), str(b_rolls)
 
-        title = str(data.get("title") or f"掷骰子对决 ({count}D{sides})")
+        title = str(data.get("title") or f"掷骰对决 ({count}D{sides})")
         lines = [
             f"🎲 **{title}**",
-            f"你的点数：{user_icons}（总计 {user_total}）",
-            f"Bot 点数：{bot_icons}（总计 {bot_total}）",
+            f"你的点数：{u_str}（总计 {u_tot}）",
+            f"Bot 点数：{b_str}（总计 {b_tot}）",
         ]
-
-        if user_total > bot_total:
+        if u_tot > b_tot:
             lines.append("🏆 **恭喜你取得了胜利！**")
-        elif user_total < bot_total:
+        elif u_tot < b_tot:
             lines.append("😢 **Bot 点数更高，你输掉了这局！**")
         else:
             lines.append("🤝 **点数相同，平分秋色！**")
@@ -205,39 +276,37 @@ class InteractiveDecisionEngine:
             text="\n".join(lines), next_layout=data.get("next_layout")
         )
 
-    def _handle_quiz(self, data: dict[str, Any]) -> InteractionDecision:
-        """处理答题与答案校验（适用于培训、问卷、通关等）。"""
+    def _handle_verify_rule(
+        self, data: dict[str, Any], context: dict[str, str]
+    ) -> InteractionDecision:
         selected = str(data.get("selected") or data.get("choice") or "").strip()
         correct = str(data.get("correct") or data.get("answer") or "").strip()
         explanation = str(data.get("explanation") or "")
         score = data.get("score")
 
-        is_correct = (
-            selected.upper() == correct.upper()
-            if selected and correct
-            else False
-        )
+        is_ok = selected.upper() == correct.upper() if selected and correct else False
 
         lines = []
-        if is_correct:
-            score_text = f"（+{score} 分）" if score is not None else ""
-            lines.append(f"✅ **回答正确！{score_text}**")
+        if is_ok:
+            score_txt = f"（+{score} 分）" if score is not None else ""
+            lines.append(f"✅ **校验/回答正确！{score_txt}**")
             lines.append(f"你的选择：`{selected}`")
         else:
-            lines.append("❌ **很遗憾，回答错误！**")
-            lines.append(f"你的选择：`{selected}` | 正确项：`{correct}`")
+            lines.append("❌ **校验/回答未通过！**")
+            lines.append(f"你的选择：`{selected}` | 预期项：`{correct}`")
 
         if explanation:
-            lines.append(f"💡 **说明/解析**：{explanation}")
+            lines.append(f"💡 **解析说明**：{explanation}")
 
         return InteractionDecision(
             text="\n".join(lines), next_layout=data.get("next_layout")
         )
 
-    def _handle_draw(self, data: dict[str, Any]) -> InteractionDecision:
-        """处理随机抽取（适用于分配客服专员、抽卡、幸运抽奖等）。"""
+    def _handle_pick_rule(
+        self, data: dict[str, Any], context: dict[str, str]
+    ) -> InteractionDecision:
         pool = data.get("pool") or data.get("items") or data.get("options")
-        title = str(data.get("title") or "抽取结果")
+        title = str(data.get("title") or "抽取/分派结果")
 
         if not isinstance(pool, list) or not pool:
             picked = "默认项"
@@ -252,8 +321,7 @@ class InteractiveDecisionEngine:
             text="\n".join(lines), next_layout=data.get("next_layout")
         )
 
-    def _handle_compare(self, data: dict[str, Any]) -> InteractionDecision:
-        """处理通用数值/大小比较。"""
+    def _handle_compare_rule(self, data: dict[str, Any]) -> InteractionDecision:
         user_val = float(data.get("user_val", 0))
         target_val = float(data.get("target_val", 0))
         title = str(data.get("title") or "比对结果")
@@ -277,5 +345,7 @@ class InteractiveDecisionEngine:
         )
 
 
-# 保持向后兼容别名
-InteractiveGameEngine = InteractiveDecisionEngine
+# 向后兼容导出
+InteractionDecisionEngine = InteractionEngine
+InteractiveDecisionEngine = InteractionEngine
+InteractiveGameEngine = InteractionEngine
